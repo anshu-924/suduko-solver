@@ -4,14 +4,21 @@ from tensorflow.keras.models import load_model
 
 
 def intializePredectionModel():
-    model = load_model('new-digit-recognition-model.keras')
+    model = load_model('confident_digit_classifier.h5')
     return model
 
 def preProcess(img):
-    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # CONVERT IMAGE TO GRAY SCALE
-    imgBlur = cv2.GaussianBlur(imgGray, (5, 5), 1)  # ADD GAUSSIAN BLUR
-    imgThreshold = cv2.adaptiveThreshold(imgBlur, 255, 1, 1, 11, 2)  # APPLY ADAPTIVE THRESHOLD
-    return imgThreshold
+    gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur  = cv2.GaussianBlur(gray, (5, 5), 1)
+    th    = cv2.adaptiveThreshold(
+                blur, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV,
+                11, 2)
+    kernel = np.ones((3, 3), np.uint8)
+    th     = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return th
+
 
 #### 3 - Reorder points for Warp Perspective
 def reorder(myPoints):
@@ -27,28 +34,30 @@ def reorder(myPoints):
 
 
 #### 3 - FINDING THE BIGGEST COUNTOUR ASSUING THAT IS THE SUDUKO PUZZLE
-def biggestContour(contours):
-    biggest = np.array([])
-    max_area = 0
-    for i in contours:
-        area = cv2.contourArea(i)
-        if area > 50:
-            peri = cv2.arcLength(i, True)
-            approx = cv2.approxPolyDP(i, 0.02 * peri, True)
-            if area > max_area and len(approx) == 4:
-                biggest = approx
-                max_area = area
-    return biggest,max_area
+def biggestContour(contours, min_area=2_000):
+    best, max_area = None, 0
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+        peri   = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4 and area > max_area:
+            # check aspect ratio
+            (x, y, w, h) = cv2.boundingRect(approx)
+            if 0.75 < w / h < 1.25:          # roughly square
+                best, max_area = approx, area
+    if best is None:
+        raise ValueError("No suitable sudoku contour found")
+    return best, max_area
+
 
 
 #### 4 - TO SPLIT THE IMAGE INTO 81 DIFFRENT IMAGES
 def splitBoxes(img):
-    rows = np.vsplit(img,9)
-    boxes=[]
-    for r in rows:
-        cols= np.hsplit(r,9)
-        for box in cols:
-            boxes.append(box)
+    h, w = img.shape[:2]
+    dh, dw = h // 9, w // 9
+    boxes = [img[r*dh:(r+1)*dh, c*dw:(c+1)*dw] for r in range(9) for c in range(9)]
     return boxes
 
 import numpy as np
@@ -70,7 +79,7 @@ def getPredection(boxes, model):
         probabilityValue = np.amax(predictions)  # Get highest probability value
         
         # Save to result
-        if probabilityValue > 0.8:
+        if probabilityValue > 0.7:
             result.append(classIndex)
         else:
             result.append(0)
